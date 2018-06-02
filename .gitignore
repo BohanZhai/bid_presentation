@@ -1,4 +1,5 @@
 *.pyc
 src_images/*_blurred*
 src_images/*_restored*
+snapshots/
 .ipynb_checkpoints
