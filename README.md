@@ -49,7 +49,7 @@ pip install -r requirements.txt
 
 
 ### Download Anaconda and install it: 
-Available from: https://www.anaconda.com/download/#macos
+Available from: https://www.anaconda.com/download
 
 
 ## Run the Jupyter notebook
