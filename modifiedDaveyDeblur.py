@@ -1,20 +1,29 @@
 import numpy as np
 import math as m
 
-import os, shutil
 from PIL import Image, ImageFont, ImageDraw
+import imageio
+import os, shutil
 
-import writeMatrix as wm # Debugging
-import pdb               # Debugging
+# import writeMatrix as wm # Debugging
+# import pdb               # Debugging
 
 
 SNAPSHOT_DIR = './snapshots'
 
+
+# Initial Estimate Selection
+class InitialEstimate:
+    BLURRED_IMAGE = 0
+    RANDOM = 1
+    CONSTANT = 2
+
+
 # Perform blind image deconvolution using the modified Davey et al algorithm
-def bid_davey(original_img, blurred_img, (psfWidth, psfHeight), iterations, save_snapshots=False):
+def bid_davey(original_img, original_psf, blurred_img, (psfWidth, psfHeight), iterations, initial=InitialEstimate.BLURRED_IMAGE, save_snapshots=False):
 
     snapshot_filenames = []
-    if(save_snapshots) :
+    if (save_snapshots) :
         if os.path.exists(SNAPSHOT_DIR):
             shutil.rmtree(SNAPSHOT_DIR)
         os.mkdir(SNAPSHOT_DIR)
@@ -34,29 +43,52 @@ def bid_davey(original_img, blurred_img, (psfWidth, psfHeight), iterations, save
 
 
 
-    # Embed original image within frame (and make original image the frame)
+    # Embed original image within and psf frame
     frame = np.zeros((entireHeight, entireWidth, channels))
     origin_x = (np.ceil((entireWidth-supportWidth)/2)+1).astype(int)
     origin_y = (np.ceil((entireHeight-supportHeight)/2)+1).astype(int)
-    frame[origin_y:(origin_y+supportHeight), origin_x: (origin_x+supportWidth), 0:channels] = original_img
+    frame[origin_y:(origin_y+supportHeight), origin_x:(origin_x+supportWidth), 0:channels] = original_img
     original_img = frame
+
+    frame = np.zeros((entireHeight, entireWidth, channels))
+    frame[origin_y:(origin_y+supportHeight), origin_x:(origin_x+supportWidth), :] = np.dstack((original_psf, original_psf, original_psf))
+    original_psf = frame
+
 
     # Storage for tracking MSE vs iteration count
     image_mse = np.zeros((iterations, 2))                 # Initialise image MSE array
-    #psf_mse = np.zeros((iterations, 2))                   # Initialise PSF MSE array
+    psf_mse = np.zeros((iterations, 2))                   # Initialise PSF MSE array
 
-    min_mse = 0                                          # Minimum MSE
-    min_mse_iterations = 0                               # Number of iterations to achieve minimum MSE
+    min_mse = 0                                           # Minimum f(^(x,y) MSE
+    min_mse_iterations = 0                                # Number of iterations to achieve minimum f(^(x,y) MSE
 
 
     ##########################
-    # Set up initial estimates
+    # Set up initial conditions
+    #
+    # 4 options :-
+    #
+    #  1) Use observed (blurred) image as starting point
+    #  2) Random initial estimate
+    #  3) Non-zero constant as initial estimate
+    #
+    initial_estimate = None
+    if initial == InitialEstimate.RANDOM:
+        initial_estimate = np.round(255*np.random.rand(entireHeight, entireWidth, channels))
+        print "Chose random"
 
-    f = blurred_img
-    # initial_estimate = np.round(255*np.random.rand(entireHeight, entireWidth, channels))
+    elif initial == InitialEstimate.CONSTANT:
+        initial_estimate = np.multiply(np.ones((entireHeight, entireWidth, channels)), 100)
+        print "Chose constant"
+
+    else:
+        initial_estimate = blurred_img
+        print "Chose blurred image"
+
+
+    f = initial_estimate
 
     g = blurred_img
-    # g  = np.round(255*np.random.rand(entireHeight, entireWidth, channels))
 
     ##########################
 
@@ -67,22 +99,23 @@ def bid_davey(original_img, blurred_img, (psfWidth, psfHeight), iterations, save
     countMAX = np.round(iterations * 0.05) # 5% increments
     counter = 0
 
+    h = None
     G = np.fft.fft2(g, axes=(0,1))
 
     for iteration in range (0, iterations):
         counter += 1
         if (counter == countMAX):
-            print ".",            # Progress bar display
+            print ".",                     # Progress bar display
             counter = 0
             if (save_snapshots):
                 generateSnapshot(f, channels, iteration, SNAPSHOT_DIR, snapshot_filenames)
 
         F = np.fft.fft2(f, axes=(0,1))
-        H = wiener(G, F)
+        H = wiener(G, F)                                     # Wiener constraint
         h = np.fft.fftshift(np.fft.ifft2(H, axes=(0,1)), axes=(0,1))
         h = psfConstraint(h, (psfWidth, psfHeight), (supportWidth, supportHeight))
         H = np.fft.fft2(h, axes=(0,1))
-        F = wiener(G, H)
+        F = wiener(G, H)                                     # Wiener constraint
         f = np.fft.fftshift(np.fft.ifft2(F, axes=(0,1)), axes=(0,1))
         f = imageConstraint(f, (supportWidth, supportHeight))
 
@@ -90,25 +123,34 @@ def bid_davey(original_img, blurred_img, (psfWidth, psfHeight), iterations, save
             print "] (complete)"
 
         # Calculate and store Mean Squared Error for iteration
-        mse = computeMSE(f, original_img)
-        image_mse[iteration, 0] = iteration
-        image_mse[iteration, 1] = mse
+        f_mse = computeMSE(f, original_img)
+        h_mse = computeMSE(h, original_psf)
+        image_mse[iteration, 0] = psf_mse[iteration, 0] = iteration
+        image_mse[iteration, 1] = f_mse
+        psf_mse[iteration, 1] = h_mse
 
         if (iteration == 0):
-            min_mse = mse
+            min_mse = f_mse
             min_mse_iterations = 0
             result = f
 
-        if (mse < min_mse):
-            min_mse = mse
+        if (f_mse < min_mse):
+            min_mse = f_mse
             min_mse_iterations = iteration
             result = f
 
-    result = result[origin_y:origin_y+supportHeight, origin_x:origin_x+supportWidth, 0:channels]
+    # end for loop
 
+
+    # Prepare to return results
+    result = result[origin_y:origin_y+supportHeight, origin_x:origin_x+supportWidth, 0:channels]
     for ch in range (0, channels):
         result[:, :, ch] = np.multiply(np.divide(result[:, :, ch], np.max(result[:, :, ch])), 255)
     result = np.abs(result).astype(np.uint8)
+
+    restored_psf = h[:,:,1]
+    restored_psf = np.multiply(np.divide(restored_psf, np.max(restored_psf)), 255)
+    restored_psf = np.abs(restored_psf).astype(np.uint8)
 
     if(save_snapshots):
         images = []
@@ -116,7 +158,7 @@ def bid_davey(original_img, blurred_img, (psfWidth, psfHeight), iterations, save
             images.append(imageio.imread(filename))
             imageio.mimsave(SNAPSHOT_DIR + '/snapshots.gif', images, format='GIF', duration=1)
 
-    return (result, image_mse, min_mse, min_mse_iterations)
+    return (result, restored_psf, image_mse, psf_mse, min_mse, min_mse_iterations)
 
 
 def psfConstraint(data, psf_dims, support):
@@ -133,13 +175,12 @@ def psfConstraint(data, psf_dims, support):
     origin_x = int(m.ceil((float(entireWidth - psfWidth) / 2) + 1))
     origin_y = int(m.ceil((float(entireHeight - psfHeight) / 2) + 1))
 
-    # Enforce positivity constraint
+    # Enforce positivity and support constraints
     frame = np.zeros((entireHeight, entireWidth, channels))
     frame[origin_y-1 : origin_y+psfHeight-1, origin_x-1 : origin_x+psfWidth-1, 0:channels] = np.ones((psfHeight, psfWidth, channels))
     data = np.multiply(data, frame).clip(min=0)
 
     # TODO check whether whole thing should be set to zero if <0 -- or just individual real/complex parts
-    # TODO need to re-add energy? from non-negative pixels?
 
     return data
 
@@ -156,12 +197,10 @@ def imageConstraint(data, support):
     origin_x = int(m.ceil((float(entireWidth - supportWidth) / 2) + 1))
     origin_y = int(m.ceil((float(entireHeight - supportHeight) / 2) + 1))
 
-    # Enforce positivity constraint
+    # Enforce positivity and support constraints
     frame = np.zeros((entireHeight, entireWidth, channels))
     frame[origin_y-1 : origin_y+supportHeight-1, origin_x-1 : origin_x+supportWidth-1, 0:channels] = np.ones((supportHeight, supportWidth, channels))
     data = np.multiply(data, frame).clip(min=0)
-
-    # TODO need to re-add energy? from non-negative pixels?
 
     return data
 
@@ -173,16 +212,16 @@ def wiener (num, den):
     return np.multiply(W, num)
 
 
-# Calculate the Mean Squared Error (MSE) between two images
-def computeMSE(img_estimate, src_image):
+# Calculate the Mean Squared Error (MSE) between two matrices
+def computeMSE(estimate, original):
     mse = 0
 
-    # Normalise image estimate
-    img_estimate = np.multiply(np.divide(img_estimate, np.max(img_estimate)), 255)
-    if (img_estimate.shape != src_image.shape):
-        raise Exception('ERROR: images are not the same dimensions [computeMSE()].')
+    # Normalise estimate
+    estimate = np.multiply(np.divide(estimate, np.max(estimate)), 255)
+    if (estimate.shape != original.shape):
+        raise Exception('ERROR: estimate %s and original %s are not the same dimensions [computeMSE()].' % (estimate.shape, original.shape))
     else:
-        mse = np.abs(np.square(np.subtract(img_estimate, src_image)).mean())
+        mse = np.abs(np.square(np.subtract(estimate, original)).mean())
 
     return mse
 
