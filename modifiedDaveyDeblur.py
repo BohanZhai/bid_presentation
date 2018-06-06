@@ -5,8 +5,6 @@ from PIL import Image, ImageFont, ImageDraw
 import imageio
 import os, shutil
 
-# import writeMatrix as wm # Debugging
-# import pdb               # Debugging
 
 
 SNAPSHOT_DIR = './snapshots'
