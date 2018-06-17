@@ -222,12 +222,12 @@ def generateSnapshot(f, channels, iteration, SNAPSHOT_DIR, snapshot_filenames):
     for ch in range (0, channels):
         snapshot = f
         snapshot[:, :, ch] = np.multiply(np.divide(snapshot[:, :, ch], np.max(snapshot[:, :, ch])), 255)
+    snapshot = np.dstack( (snapshot, 255*np.ones((snapshot.shape[0], snapshot.shape[1]))) )
     snapshot = np.abs(snapshot).astype(np.uint8)
     filename = SNAPSHOT_DIR + '/snap_' + '{:06d}'.format(iteration) + '.bmp'
-
-    img = Image.fromarray(snapshot[:,:,0],mode='L')
+    img = Image.fromarray(snapshot, mode='RGBA')
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
-    draw.text((10, snapshot.shape[0]-10), "Snap-" + str(iteration), font=font, fill=255)
+    draw.text((10, snapshot.shape[0]-10), "Snap-" + str(iteration), font=font, fill="#fff0c0")
     snapshot_filenames.append(filename)
     img.save(filename)
