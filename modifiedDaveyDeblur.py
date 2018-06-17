@@ -5,8 +5,6 @@ from PIL import Image, ImageFont, ImageDraw
 import imageio
 import os, shutil
 
-
-
 SNAPSHOT_DIR = './snapshots'
 
 
@@ -73,15 +71,12 @@ def bid_davey(original_img, original_psf, blurred_img, (psfWidth, psfHeight), it
     initial_estimate = None
     if initial == InitialEstimate.RANDOM:
         initial_estimate = np.round(255*np.random.rand(entireHeight, entireWidth, channels))
-        print "Chose random"
 
     elif initial == InitialEstimate.CONSTANT:
         initial_estimate = np.multiply(np.ones((entireHeight, entireWidth, channels)), 100)
-        print "Chose constant"
 
     else:
         initial_estimate = blurred_img
-        print "Chose blurred image"
 
 
     f = initial_estimate
